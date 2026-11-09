@@ -1,0 +1,10 @@
+<script>
+export default {
+  onCreate() {
+    console.log('japa counter created')
+  },
+  onDestroy() {
+    console.log('japa counter destroyed')
+  }
+}
+</script>

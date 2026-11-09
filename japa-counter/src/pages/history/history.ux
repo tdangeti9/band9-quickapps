@@ -1,0 +1,157 @@
+<template>
+  <div class="page" onswipe="onSwipe">
+    <text class="title">History</text>
+    <text class="sub">day = 5AM→5AM</text>
+    <list class="list">
+      <list-item for="{{rows}}" type="row" class="{{$item.rowClass}}">
+        <text class="{{$item.labelClass}}">{{$item.label}}</text>
+        <text class="{{$item.valueClass}}">{{$item.value}}</text>
+      </list-item>
+    </list>
+    <text class="back-hint">swipe → back</text>
+  </div>
+</template>
+
+<script>
+import storage from '@system.storage'
+import router from '@system.router'
+import hist from '../../common/history'
+import bright from '../../common/brightness'
+
+export default {
+  private: {
+    rows: []
+  },
+
+  onInit() {
+    bright.restoreSystemBrightness()
+    this.load()
+  },
+
+  onShow() {
+    bright.restoreSystemBrightness()
+    this.load()
+  },
+
+  onHide() {
+    bright.restoreSystemBrightness()
+  },
+
+  onDestroy() {
+    bright.restoreSystemBrightness()
+  },
+
+  load() {
+    var self = this
+    var today = hist.japaDayKey(new Date())
+    storage.get({
+      key: hist.HIST_KEY,
+      default: '',
+      success: function (data) {
+        var h
+        try {
+          h = hist.ensureHistory(data ? JSON.parse(data) : null)
+        } catch (e) {
+          h = hist.emptyHistory()
+        }
+        var built = hist.buildHistoryRows(h, today)
+        self.rows = built.map(function (r) {
+          var isHdr = r.type === 'hdr'
+          return {
+            label: r.label,
+            value: r.value || '',
+            rowClass: isHdr ? 'row hdr-row' : 'row',
+            labelClass: isHdr ? 'hdr-label' : 'label',
+            valueClass: isHdr ? 'hdr-value' : 'value'
+          }
+        })
+      },
+      fail: function () {
+        self.rows = [{ label: 'No data', value: '', rowClass: 'row', labelClass: 'label', valueClass: 'value' }]
+      }
+    })
+  },
+
+  onSwipe(evt) {
+    if (evt && evt.direction === 'right') {
+      bright.restoreSystemBrightness()
+      router.back()
+    }
+  }
+}
+</script>
+
+<style>
+.page {
+  width: 96px;
+  height: 245px;
+  flex-direction: column;
+  align-items: center;
+  background-color: #000000;
+  padding-top: 6px;
+  padding-bottom: 4px;
+}
+
+.title {
+  font-size: 12px;
+  color: #ffd54f;
+  font-weight: bold;
+  text-align: center;
+}
+
+.sub {
+  font-size: 8px;
+  color: #b0a898;
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.list {
+  flex: 1;
+  width: 96px;
+}
+
+.row {
+  width: 96px;
+  height: 18px;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.hdr-row {
+  height: 16px;
+  margin-top: 4px;
+}
+
+.hdr-label {
+  font-size: 9px;
+  color: #ffffff;
+  font-weight: bold;
+}
+
+.hdr-value {
+  font-size: 8px;
+  color: #000000;
+}
+
+.label {
+  font-size: 10px;
+  color: #e0e0e0;
+}
+
+.value {
+  font-size: 10px;
+  color: #ffd54f;
+  text-align: right;
+}
+
+.back-hint {
+  font-size: 8px;
+  color: #888888;
+  text-align: center;
+  margin-top: 2px;
+}
+</style>

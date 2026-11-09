@@ -1,0 +1,30 @@
+{
+  "package": "com.hourly.vibe",
+  "name": "Hourly",
+  "versionName": "1.1.0",
+  "versionCode": 2,
+  "minPlatformVersion": 1000,
+  "icon": "/common/icon.png",
+  "deviceTypeList": ["watch"],
+  "features": [
+    { "name": "system.vibrator" },
+    { "name": "system.storage" },
+    { "name": "system.brightness" },
+    { "name": "system.audio" }
+  ],
+  "config": {
+    "logLevel": "log",
+    "designWidth": 96,
+    "background": {
+      "features": ["system.audio"]
+    }
+  },
+  "router": {
+    "entry": "pages/index",
+    "pages": {
+      "pages/index": {
+        "component": "index"
+      }
+    }
+  }
+}

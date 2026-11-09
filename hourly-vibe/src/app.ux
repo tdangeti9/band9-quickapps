@@ -1,0 +1,371 @@
+<script>
+import vibrator from '@system.vibrator'
+import storage from '@system.storage'
+import audio from '@system.audio'
+
+// Scheduler lives in the APP (not the page) so it can survive leaving
+// the UI while system.audio keeps the process eligible for background.
+var PULSE_COUNT = 5
+var PULSE_GAP_MS = 400
+var ENABLED_KEY = 'hourly_enabled'
+var LAST_FIRED_KEY = 'hourly_last_fired'
+var KEEP_AUDIO_KEY = 'hourly_bg_audio'
+
+function pad2(n) {
+  return n < 10 ? '0' + n : String(n)
+}
+
+function hourKey(d) {
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' +
+    pad2(d.getDate()) + 'T' + pad2(d.getHours())
+}
+
+function msUntilNextHour(now) {
+  var next = new Date(now.getTime())
+  next.setMinutes(0, 0, 0)
+  next.setSeconds(0)
+  next.setMilliseconds(0)
+  next.setHours(next.getHours() + 1)
+  return next.getTime() - now.getTime()
+}
+
+function formatNextFire(now) {
+  var next = new Date(now.getTime())
+  next.setMinutes(0, 0, 0)
+  next.setSeconds(0)
+  next.setMilliseconds(0)
+  next.setHours(next.getHours() + 1)
+  return pad2(next.getHours()) + ':00'
+}
+
+export default {
+  data: {
+    enabled: true,
+    bgAudio: true,
+    statusLine: 'Loading…',
+    nextFire: '--:00',
+    clock: '00:00',
+    lastFiredHourKey: '',
+    audioOk: false,
+    listeners: []
+  },
+
+  onCreate() {
+    var self = this
+    this._tickTimer = null
+    this._fireTimer = null
+    this._pulseTimer = null
+    this._pulsing = false
+    this._audioStarted = false
+    this.bindAudioEvents()
+    this.loadPrefs(function () {
+      self.refreshClock()
+      if (self.data.enabled) {
+        self.startService()
+      } else {
+        self.data.statusLine = 'Off'
+        self.notify()
+      }
+    })
+  },
+
+  onShow() {
+    this.refreshClock()
+    this.notify()
+  },
+
+  onHide() {
+    // With background audio running, process should keep going.
+    if (this.data.enabled && this._audioStarted) {
+      this.data.statusLine = 'BG armed'
+    } else if (this.data.enabled) {
+      this.data.statusLine = 'May pause (no BG audio)'
+    }
+    this.notify()
+  },
+
+  onDestroy() {
+    this.stopService(true)
+  },
+
+  bindAudioEvents() {
+    var self = this
+    try {
+      audio.onerror = function () {
+        self.data.audioOk = false
+        self._audioStarted = false
+        if (self.data.enabled) {
+          self.data.statusLine = 'Audio BG failed'
+        }
+        self.notify()
+      }
+      audio.onplay = function () {
+        self.data.audioOk = true
+        self._audioStarted = true
+        if (self.data.enabled) {
+          self.data.statusLine = 'Armed (BG)'
+        }
+        self.notify()
+      }
+      audio.onended = function () {
+        // Should not fire when loop=true; restart if it does.
+        if (self.data.enabled && self.data.bgAudio) {
+          try { audio.play() } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  },
+
+  loadPrefs(done) {
+    var self = this
+    var pending = 3
+    function tick() {
+      pending--
+      if (pending <= 0 && done) done()
+    }
+    storage.get({
+      key: ENABLED_KEY,
+      default: '1',
+      success: function (data) {
+        self.data.enabled = data !== '0'
+        tick()
+      },
+      fail: tick
+    })
+    storage.get({
+      key: KEEP_AUDIO_KEY,
+      default: '1',
+      success: function (data) {
+        self.data.bgAudio = data !== '0'
+        tick()
+      },
+      fail: tick
+    })
+    storage.get({
+      key: LAST_FIRED_KEY,
+      default: '',
+      success: function (data) {
+        self.data.lastFiredHourKey = data || ''
+        tick()
+      },
+      fail: tick
+    })
+  },
+
+  persistEnabled() {
+    storage.set({ key: ENABLED_KEY, value: this.data.enabled ? '1' : '0' })
+  },
+
+  persistBgAudio() {
+    storage.set({ key: KEEP_AUDIO_KEY, value: this.data.bgAudio ? '1' : '0' })
+  },
+
+  persistLastFired() {
+    storage.set({ key: LAST_FIRED_KEY, value: this.data.lastFiredHourKey || '' })
+  },
+
+  // Pages subscribe for UI updates
+  addListener(fn) {
+    if (typeof fn === 'function') this.data.listeners.push(fn)
+  },
+
+  removeListener(fn) {
+    var out = []
+    for (var i = 0; i < this.data.listeners.length; i++) {
+      if (this.data.listeners[i] !== fn) out.push(this.data.listeners[i])
+    }
+    this.data.listeners = out
+  },
+
+  notify() {
+    var snap = this.snapshot()
+    var list = this.data.listeners || []
+    for (var i = 0; i < list.length; i++) {
+      try { list[i](snap) } catch (e) {}
+    }
+  },
+
+  snapshot() {
+    return {
+      enabled: this.data.enabled,
+      bgAudio: this.data.bgAudio,
+      statusLine: this.data.statusLine,
+      nextFire: this.data.nextFire,
+      clock: this.data.clock,
+      audioOk: this.data.audioOk
+    }
+  },
+
+  setEnabled(on) {
+    this.data.enabled = !!on
+    this.persistEnabled()
+    if (this.data.enabled) {
+      this.startService()
+    } else {
+      this.stopService(false)
+      this.data.statusLine = 'Off'
+      this.data.nextFire = '--:00'
+      this.notify()
+    }
+  },
+
+  setBgAudio(on) {
+    this.data.bgAudio = !!on
+    this.persistBgAudio()
+    if (this.data.enabled) {
+      if (this.data.bgAudio) this.startAudio()
+      else this.stopAudio()
+      this.data.statusLine = this.data.bgAudio ? 'Armed (BG)' : 'Armed (FG only)'
+    }
+    this.notify()
+  },
+
+  startService() {
+    this.refreshClock()
+    this.startTick()
+    this.reschedule()
+    if (this.data.bgAudio) this.startAudio()
+    else this.data.statusLine = 'Armed (FG only)'
+    this.notify()
+  },
+
+  stopService(destroying) {
+    this.clearFireTimer()
+    this.clearPulseTimer()
+    if (this._tickTimer) {
+      clearInterval(this._tickTimer)
+      this._tickTimer = null
+    }
+    this.stopAudio()
+    if (!destroying) this.notify()
+  },
+
+  startAudio() {
+    try {
+      audio.src = '/common/keepalive.wav'
+      audio.loop = true
+      audio.autoplay = false
+      audio.muted = true
+      audio.volume = 0
+      audio.meta = { title: 'Hourly', artist: 'keepalive', album: 'Hourly' }
+      audio.play()
+      this._audioStarted = true
+      this.data.audioOk = true
+    } catch (e) {
+      this._audioStarted = false
+      this.data.audioOk = false
+      this.data.statusLine = 'Audio BG failed'
+    }
+  },
+
+  stopAudio() {
+    try {
+      audio.stop()
+    } catch (e) {}
+    this._audioStarted = false
+  },
+
+  refreshClock() {
+    var now = new Date()
+    this.data.clock = pad2(now.getHours()) + ':' + pad2(now.getMinutes())
+    this.data.nextFire = this.data.enabled ? formatNextFire(now) : '--:00'
+  },
+
+  startTick() {
+    var self = this
+    if (this._tickTimer) {
+      clearInterval(this._tickTimer)
+      this._tickTimer = null
+    }
+    this._tickTimer = setInterval(function () {
+      self.refreshClock()
+      self.checkHourBoundary()
+      self.notify()
+    }, 1000)
+  },
+
+  clearFireTimer() {
+    if (this._fireTimer) {
+      clearTimeout(this._fireTimer)
+      this._fireTimer = null
+    }
+  },
+
+  clearPulseTimer() {
+    if (this._pulseTimer) {
+      clearTimeout(this._pulseTimer)
+      this._pulseTimer = null
+    }
+  },
+
+  reschedule() {
+    var self = this
+    this.clearFireTimer()
+    this.refreshClock()
+    if (!this.data.enabled) return
+    var delay = msUntilNextHour(new Date())
+    if (delay < 50) delay = 50
+    if (delay > 3601000) delay = 3601000
+    this._fireTimer = setTimeout(function () {
+      self._fireTimer = null
+      self.fireHourly()
+    }, delay)
+  },
+
+  checkHourBoundary() {
+    if (!this.data.enabled || this._pulsing) return
+    var now = new Date()
+    if (now.getMinutes() === 0 && now.getSeconds() < 3) {
+      var key = hourKey(now)
+      if (key !== this.data.lastFiredHourKey) {
+        this.fireHourly()
+      }
+    }
+  },
+
+  fireHourly() {
+    var now = new Date()
+    var key = hourKey(now)
+    if (key === this.data.lastFiredHourKey) {
+      this.reschedule()
+      return
+    }
+    this.data.lastFiredHourKey = key
+    this.persistLastFired()
+    this.data.statusLine = 'Fired'
+    this.notify()
+    this.playTwoSecondVibe()
+    this.reschedule()
+  },
+
+  playTwoSecondVibe() {
+    var self = this
+    this.clearPulseTimer()
+    this._pulsing = true
+    var i = 0
+    function pulse() {
+      try {
+        vibrator.vibrate({ mode: 'long' })
+      } catch (e) {}
+      i++
+      if (i >= PULSE_COUNT) {
+        self._pulsing = false
+        self._pulseTimer = null
+        if (self.data.enabled) {
+          self.data.statusLine = self._audioStarted ? 'Armed (BG)' : 'Armed'
+        }
+        self.notify()
+        return
+      }
+      self._pulseTimer = setTimeout(pulse, PULSE_GAP_MS)
+    }
+    pulse()
+  },
+
+  testVibe() {
+    this.data.statusLine = 'Test'
+    this.notify()
+    this.playTwoSecondVibe()
+  }
+}
+</script>

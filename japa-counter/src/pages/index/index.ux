@@ -1,0 +1,543 @@
+<template>
+  <div class="page" onswipe="onSwipe">
+    <div class="count-zone" onclick="onBeadTap">
+      <text class="clock">{{clock}}</text>
+
+      <div class="mala-row">
+        <text class="mala-label">Mala</text>
+        <text class="mala-count">{{mala}}</text>
+      </div>
+
+      <div class="bead-row">
+        <text class="bead-count">{{beads}}</text>
+        <text class="bead-hint">/ 108</text>
+      </div>
+
+      <text class="hint-hist">← hist  |  exit →</text>
+    </div>
+
+    <div class="reset-block" if="{{!awaitingConfirm}}">
+      <div class="reset-track">
+        <div class="reset-fill" style="width: {{resetBarWidth}}px;"></div>
+      </div>
+      <div
+        class="reset-row"
+        ontouchstart="onResetHoldStart"
+        ontouchend="onResetHoldCancel"
+        ontouchcancel="onResetHoldCancel"
+      >
+        <text class="reset-btn">{{resetLabel}}</text>
+      </div>
+    </div>
+
+    <div class="confirm-block" if="{{awaitingConfirm}}">
+      <text class="confirm-title">Reset?</text>
+      <div class="confirm-row">
+        <div class="confirm-yes" onclick="onConfirmReset">
+          <text class="confirm-yes-txt">Yes</text>
+        </div>
+        <div class="confirm-no" onclick="onCancelConfirm">
+          <text class="confirm-no-txt">No</text>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+import vibrator from '@system.vibrator'
+import storage from '@system.storage'
+import router from '@system.router'
+import app from '@system.app'
+import hist from '../../common/history'
+import bright from '../../common/brightness'
+
+var BEADS_PER_MALA = 108
+var HOLD_MS = 4000
+var TICK_MS = 50
+var BAR_FULL_WIDTH = 88
+var FLASH_MS = 450
+var CONFIRM_TIMEOUT_MS = 8000
+
+export default {
+  private: {
+    beads: 0,
+    mala: 0,
+    clock: '00:00',
+    resetBarWidth: 0,
+    resetLabel: 'Hold Reset',
+    awaitingConfirm: false,
+    dayKey: '',
+    _holdTimer: null,
+    _holdStartedAt: 0,
+    _clockTimer: null,
+    _flashTimer: null,
+    _confirmTimer: null,
+    _completing: false,
+    _history: null
+  },
+
+  onInit() {
+    // Unstick Band 9 if a prior build left system brightness near zero
+    bright.restoreSystemBrightness()
+    this.bootLoad()
+    this.updateClock()
+    var self = this
+    this._clockTimer = setInterval(function () {
+      self.updateClock()
+      self.checkDayRollover()
+    }, 1000)
+  },
+
+  onShow() {
+    bright.restoreSystemBrightness()
+    this.checkDayRollover()
+  },
+
+  onHide() {
+    bright.restoreSystemBrightness()
+  },
+
+  onDestroy() {
+    bright.restoreSystemBrightness()
+    this.clearHoldTimer()
+    this.clearFlashTimer()
+    this.clearConfirmTimer()
+    if (this._clockTimer) {
+      clearInterval(this._clockTimer)
+      this._clockTimer = null
+    }
+  },
+
+  bootLoad() {
+    var self = this
+    storage.get({
+      key: hist.HIST_KEY,
+      default: '',
+      success: function (data) {
+        try {
+          self._history = hist.ensureHistory(data ? JSON.parse(data) : null)
+        } catch (e) {
+          self._history = hist.emptyHistory()
+        }
+        self.loadCountersThenRollover()
+      },
+      fail: function () {
+        self._history = hist.emptyHistory()
+        self.loadCountersThenRollover()
+      }
+    })
+  },
+
+  loadCountersThenRollover() {
+    var self = this
+    var pending = 3
+    function done() {
+      pending--
+      if (pending <= 0) self.checkDayRollover(true)
+    }
+    storage.get({
+      key: hist.BEADS_KEY,
+      default: '0',
+      success: function (data) {
+        var n = parseInt(data, 10)
+        self.beads = isNaN(n) ? 0 : n
+        done()
+      },
+      fail: done
+    })
+    storage.get({
+      key: hist.MALA_KEY,
+      default: '0',
+      success: function (data) {
+        var n = parseInt(data, 10)
+        self.mala = isNaN(n) ? 0 : n
+        done()
+      },
+      fail: done
+    })
+    storage.get({
+      key: hist.DAY_KEY,
+      default: '',
+      success: function (data) {
+        self.dayKey = data || ''
+        done()
+      },
+      fail: done
+    })
+  },
+
+  checkDayRollover(forceSaveDayKey) {
+    var today = hist.japaDayKey(new Date())
+    if (!this.dayKey) {
+      this.dayKey = today
+      this.persistDayKey()
+      if (forceSaveDayKey) this.saveState()
+      return
+    }
+    if (this.dayKey === today) return
+
+    // Archive the finished japa-day, then reset live counters
+    var finished = this.dayKey
+    this._history = hist.archiveDay(this._history, finished, this.beads, this.mala)
+    this._history = hist.pruneHistory(this._history, today)
+    this.persistHistory()
+    this.beads = 0
+    this.mala = 0
+    this.dayKey = today
+    this.persistDayKey()
+    this.saveState()
+  },
+
+  persistDayKey() {
+    storage.set({ key: hist.DAY_KEY, value: this.dayKey })
+  },
+
+  persistHistory() {
+    try {
+      storage.set({ key: hist.HIST_KEY, value: JSON.stringify(this._history || hist.emptyHistory()) })
+    } catch (e) {}
+  },
+
+  updateClock() {
+    var now = new Date()
+    this.clock = hist.pad2(now.getHours()) + ':' + hist.pad2(now.getMinutes())
+  },
+
+  saveState() {
+    storage.set({ key: hist.BEADS_KEY, value: String(this.beads) })
+    storage.set({ key: hist.MALA_KEY, value: String(this.mala) })
+  },
+
+  haptic(mode) {
+    try {
+      vibrator.vibrate({ mode: mode || 'short' })
+    } catch (e) {}
+  },
+
+  clearFlashTimer() {
+    if (this._flashTimer) {
+      clearTimeout(this._flashTimer)
+      this._flashTimer = null
+    }
+  },
+
+  onBeadTap() {
+    // Any tap also forces brightness up (in case open didn't stick)
+    bright.restoreSystemBrightness()
+    // Accidental japa taps cancel a pending reset confirm
+    if (this.awaitingConfirm) {
+      this.onCancelConfirm()
+      return
+    }
+    this.checkDayRollover()
+    if (this._completing) return
+    var next = this.beads + 1
+    if (next >= BEADS_PER_MALA) {
+      var self = this
+      this._completing = true
+      this.beads = BEADS_PER_MALA
+      this.haptic('long')
+      this.clearFlashTimer()
+      this._flashTimer = setTimeout(function () {
+        self.mala = self.mala + 1
+        self.beads = 0
+        self.saveState()
+        self._completing = false
+        self._flashTimer = null
+      }, FLASH_MS)
+    } else {
+      this.beads = next
+      this.haptic('short')
+      this.saveState()
+    }
+  },
+
+  onSwipe(evt) {
+    if (!evt) return
+    if (evt.direction === 'left') {
+      bright.restoreSystemBrightness()
+      this.mirrorTodayIntoHistory()
+      router.push({ uri: '/pages/history' })
+      return
+    }
+    if (evt.direction === 'right') {
+      bright.restoreSystemBrightness()
+      try {
+        app.terminate()
+      } catch (e) {
+        try {
+          this.$app.exit()
+        } catch (e2) {
+          router.back()
+        }
+      }
+    }
+  },
+
+  mirrorTodayIntoHistory() {
+    this.checkDayRollover()
+    var today = this.dayKey || hist.japaDayKey(new Date())
+    this._history = hist.archiveDay(this._history, today, this.beads, this.mala)
+    this._history = hist.pruneHistory(this._history, today)
+    this.persistHistory()
+  },
+
+  clearHoldTimer() {
+    if (this._holdTimer) {
+      clearInterval(this._holdTimer)
+      this._holdTimer = null
+    }
+  },
+
+  clearConfirmTimer() {
+    if (this._confirmTimer) {
+      clearTimeout(this._confirmTimer)
+      this._confirmTimer = null
+    }
+  },
+
+  onResetHoldStart() {
+    if (this.awaitingConfirm) return
+    var self = this
+    this.clearHoldTimer()
+    this._holdStartedAt = Date.now()
+    this.resetBarWidth = 0
+    this.resetLabel = 'Hold…'
+    this._holdTimer = setInterval(function () {
+      var elapsed = Date.now() - self._holdStartedAt
+      var ratio = elapsed / HOLD_MS
+      if (ratio >= 1) {
+        self.resetBarWidth = BAR_FULL_WIDTH
+        self.clearHoldTimer()
+        self.enterConfirm()
+        return
+      }
+      self.resetBarWidth = Math.floor(ratio * BAR_FULL_WIDTH)
+    }, TICK_MS)
+  },
+
+  onResetHoldCancel() {
+    if (this.awaitingConfirm) return
+    if (!this._holdTimer && this.resetBarWidth <= 0) return
+    if (this.resetBarWidth < BAR_FULL_WIDTH) {
+      this.clearHoldTimer()
+      this.resetBarWidth = 0
+      this.resetLabel = 'Hold Reset'
+    }
+  },
+
+  enterConfirm() {
+    var self = this
+    this.awaitingConfirm = true
+    this.resetBarWidth = 0
+    this.resetLabel = 'Hold Reset'
+    this.haptic('short')
+    this.clearConfirmTimer()
+    this._confirmTimer = setTimeout(function () {
+      self.onCancelConfirm()
+    }, CONFIRM_TIMEOUT_MS)
+  },
+
+  onConfirmReset() {
+    this.clearConfirmTimer()
+    this.awaitingConfirm = false
+    this.doReset()
+  },
+
+  onCancelConfirm() {
+    this.clearConfirmTimer()
+    this.awaitingConfirm = false
+    this.resetBarWidth = 0
+    this.resetLabel = 'Hold Reset'
+  },
+
+  doReset() {
+    this.clearFlashTimer()
+    this._completing = false
+    this.beads = 0
+    this.mala = 0
+    this.saveState()
+    this.haptic('long')
+    this.resetBarWidth = 0
+    this.resetLabel = 'Hold Reset'
+    this.awaitingConfirm = false
+  }
+}
+</script>
+
+<style>
+.page {
+  width: 96px;
+  height: 245px;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #000000;
+  padding-top: 4px;
+  padding-bottom: 8px;
+}
+
+.count-zone {
+  width: 96px;
+  height: 190px;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  background-color: #000000;
+}
+
+.clock {
+  width: 96px;
+  height: 22px;
+  font-size: 14px;
+  color: #ffffff;
+  font-weight: bold;
+  text-align: center;
+  margin-top: 6px;
+}
+
+.mala-row {
+  width: 96px;
+  height: 36px;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.mala-label {
+  font-size: 10px;
+  color: #d4a017;
+  text-align: center;
+}
+
+.mala-count {
+  font-size: 18px;
+  color: #ffd54f;
+  font-weight: bold;
+  text-align: center;
+}
+
+.bead-row {
+  width: 96px;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.bead-count {
+  font-size: 42px;
+  color: #ffffff;
+  font-weight: bold;
+  text-align: center;
+}
+
+.bead-hint {
+  font-size: 11px;
+  color: #b0a898;
+  text-align: center;
+  margin-top: 2px;
+}
+
+.hint-hist {
+  font-size: 9px;
+  color: #888888;
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.reset-block {
+  width: 96px;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.reset-track {
+  width: 88px;
+  height: 6px;
+  margin-bottom: 6px;
+  flex-direction: row;
+  justify-content: flex-start;
+  align-items: stretch;
+  background-color: #12100e;
+}
+
+.reset-fill {
+  height: 6px;
+  background-color: #5a1818;
+}
+
+.reset-row {
+  width: 96px;
+  height: 28px;
+  justify-content: center;
+  align-items: center;
+}
+
+.reset-btn {
+  font-size: 11px;
+  color: #aaaaaa;
+  text-align: center;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.confirm-block {
+  width: 96px;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding-bottom: 2px;
+}
+
+.confirm-title {
+  width: 96px;
+  font-size: 12px;
+  color: #ffd54f;
+  font-weight: bold;
+  text-align: center;
+  margin-bottom: 6px;
+}
+
+.confirm-row {
+  width: 96px;
+  height: 28px;
+  flex-direction: row;
+  justify-content: space-around;
+  align-items: center;
+}
+
+.confirm-yes {
+  width: 40px;
+  height: 26px;
+  justify-content: center;
+  align-items: center;
+  background-color: #5a1818;
+}
+
+.confirm-no {
+  width: 40px;
+  height: 26px;
+  justify-content: center;
+  align-items: center;
+  background-color: #1a1a1a;
+}
+
+.confirm-yes-txt {
+  font-size: 12px;
+  color: #ffffff;
+  font-weight: bold;
+  text-align: center;
+}
+
+.confirm-no-txt {
+  font-size: 12px;
+  color: #cccccc;
+  text-align: center;
+}
+</style>

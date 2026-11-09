@@ -1,0 +1,201 @@
+<template>
+  <div class="page">
+    <text class="clock">{{clock}}</text>
+
+    <text class="title">Hourly</text>
+    <text class="subtitle">{{statusLine}}</text>
+
+    <div class="toggle-row" onclick="toggleEnabled">
+      <text class="toggle-label">{{enabledLabel}}</text>
+    </div>
+
+    <text class="next-label">Next</text>
+    <text class="next-time">{{nextFire}}</text>
+
+    <div class="row" onclick="toggleBgAudio">
+      <text class="row-label">{{bgAudioLabel}}</text>
+    </div>
+
+    <div class="row test" onclick="onTestVibe">
+      <text class="row-label">Test vibe</text>
+    </div>
+
+    <text class="hint">{{hint}}</text>
+  </div>
+</template>
+
+<script>
+export default {
+  private: {
+    clock: '00:00',
+    enabled: true,
+    bgAudio: true,
+    enabledLabel: 'ON',
+    bgAudioLabel: 'BG audio: ON',
+    statusLine: 'Loading…',
+    nextFire: '--:00',
+    hint: 'Arm, then go home',
+    _onSnap: null
+  },
+
+  onInit() {
+    var self = this
+    this._onSnap = function (snap) {
+      self.applySnap(snap)
+    }
+    var app = this.$app.$def
+    if (app && app.addListener) app.addListener(this._onSnap)
+    if (app && app.snapshot) this.applySnap(app.snapshot())
+  },
+
+  onShow() {
+    var app = this.$app.$def
+    if (app && app.snapshot) this.applySnap(app.snapshot())
+  },
+
+  onDestroy() {
+    var app = this.$app.$def
+    if (app && app.removeListener && this._onSnap) {
+      app.removeListener(this._onSnap)
+    }
+  },
+
+  applySnap(snap) {
+    if (!snap) return
+    this.clock = snap.clock || this.clock
+    this.enabled = !!snap.enabled
+    this.bgAudio = !!snap.bgAudio
+    this.statusLine = snap.statusLine || ''
+    this.nextFire = snap.nextFire || '--:00'
+    this.enabledLabel = this.enabled ? 'ON' : 'OFF'
+    this.bgAudioLabel = this.bgAudio ? 'BG audio: ON' : 'BG audio: OFF'
+    if (!this.enabled) {
+      this.hint = 'Toggle ON to arm'
+    } else if (this.bgAudio) {
+      this.hint = snap.audioOk === false
+        ? 'BG audio failed — use phone notify'
+        : 'Armed — OK to leave app'
+    } else {
+      this.hint = 'Without BG audio, leave = pause'
+    }
+  },
+
+  toggleEnabled() {
+    var app = this.$app.$def
+    if (app && app.setEnabled) app.setEnabled(!this.enabled)
+  },
+
+  toggleBgAudio() {
+    var app = this.$app.$def
+    if (app && app.setBgAudio) app.setBgAudio(!this.bgAudio)
+  },
+
+  onTestVibe() {
+    var app = this.$app.$def
+    if (app && app.testVibe) app.testVibe()
+  }
+}
+</script>
+
+<style>
+.page {
+  width: 96px;
+  height: 245px;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  background-color: #000000;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.clock {
+  width: 96px;
+  height: 18px;
+  font-size: 12px;
+  color: #5a5348;
+  font-weight: bold;
+  text-align: center;
+}
+
+.title {
+  width: 96px;
+  height: 22px;
+  font-size: 18px;
+  color: #c8c0b4;
+  font-weight: bold;
+  text-align: center;
+  margin-top: 2px;
+}
+
+.subtitle {
+  width: 96px;
+  height: 14px;
+  font-size: 10px;
+  color: #6a6258;
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.toggle-row {
+  width: 80px;
+  height: 28px;
+  justify-content: center;
+  align-items: center;
+  background-color: #1a1814;
+  margin-bottom: 6px;
+}
+
+.toggle-label {
+  font-size: 14px;
+  color: #9a9288;
+  font-weight: bold;
+  text-align: center;
+}
+
+.next-label {
+  width: 96px;
+  height: 12px;
+  font-size: 9px;
+  color: #3d3830;
+  text-align: center;
+}
+
+.next-time {
+  width: 96px;
+  height: 24px;
+  font-size: 20px;
+  color: #8a7010;
+  font-weight: bold;
+  text-align: center;
+  margin-bottom: 6px;
+}
+
+.row {
+  width: 88px;
+  height: 22px;
+  justify-content: center;
+  align-items: center;
+  background-color: #12100e;
+  margin-bottom: 4px;
+}
+
+.row.test {
+  background-color: #181410;
+}
+
+.row-label {
+  font-size: 10px;
+  color: #6a6258;
+  text-align: center;
+}
+
+.hint {
+  width: 92px;
+  height: 28px;
+  font-size: 8px;
+  color: #2a2722;
+  text-align: center;
+  margin-top: 4px;
+}
+</style>
